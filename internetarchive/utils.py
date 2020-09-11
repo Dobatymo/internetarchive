@@ -97,17 +97,43 @@ def norm_filepath(fp):
         fp = fp.decode('utf-8')
     return fp
 
+from pathlib import Path
+import logging
+from genutility.exceptions import NoResult
+from genutility.filesdb import FileDbSimple
+
+class MD5DB(FileDbSimple):
+
+    @classmethod
+    def derived(cls):
+        return [
+            ("md5", "CHAR(32)", "?"),
+        ]
+
+    def __init__(self):
+        FileDbSimple.__init__(self, "D:\\ia_md5.sqlite", "md5")
 
 def get_md5(file_object):
-    m = hashlib.md5()
-    while True:
-        data = file_object.read(8192)
-        if not data:
-            break
-        m.update(data)
-    file_object.seek(0, os.SEEK_SET)
-    return m.hexdigest()
 
+    path = Path(file_object.name)
+    db = MD5DB()
+
+    try:
+        md5, = db.get(path, only={"md5"})
+        logging.info("Found md5 of %s in db: %s", path, md5)
+    except NoResult:
+        m = hashlib.md5()
+        while True:
+            data = file_object.read(8192)
+            if not data:
+                break
+            m.update(data)
+        file_object.seek(0, os.SEEK_SET)
+        md5 = m.hexdigest()
+        db.add(path, derived={"md5": md5})
+        logging.info("Added md5 of %s to db: %s", path, md5)
+
+    return md5
 
 def chunk_generator(fp, chunk_size):
     while True:
