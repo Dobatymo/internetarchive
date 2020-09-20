@@ -32,6 +32,7 @@ from fnmatch import fnmatch
 from logging import getLogger
 from time import sleep
 import math
+import socket
 from xml.dom.minidom import parseString
 from xml.parsers.expat import ExpatError
 
@@ -1050,6 +1051,10 @@ class Item(BaseItem):
                                 print(' warning: {0}'.format(error_msg), file=sys.stderr)
                             retries -= 1
                             continue
+                    else:
+                        log.error("Retries exceeded")
+                        return Response()
+
                     request = _build_request()
                     prepared_request = request.prepare()
 
@@ -1059,9 +1064,39 @@ class Item(BaseItem):
                     if prepared_request.headers.get('transfer-encoding') == 'chunked':
                         del prepared_request.headers['transfer-encoding']
 
-                    response = self.session.send(prepared_request,
+                    try:
+                        response = self.session.send(prepared_request,
                                                  stream=True,
                                                  **request_kwargs)
+                    except ConnectionError as exc:
+                        exc = exc.args[0]
+                        if isinstance(exc, ProtocolError) and retries > 0:  # from urllib3
+                            exc = exc.args[1]
+                            if isinstance(exc, socket.timeout):
+                                log.exception("socket.timeout. Retrying.")
+                                sleep(retries_sleep)
+                                retries -= 1
+                                continue
+                            elif isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                                if isinstance(exc, RemoteDisconnected):  # RemoteDisconnected inherits from ConnectionResetError
+                                    raise
+                                log.info("%s. Retrying.", exc)
+                                sleep(retries_sleep)
+                                retries -= 1
+                                continue
+                            elif isinstance(exc, OSError):
+                                if exc.args[0] == "(10054, 'WSAECONNRESET')":
+                                    log.exception("WSAECONNRESET. Retrying.")
+                                    sleep(retries_sleep)
+                                    retries -= 1
+                                    continue
+                                else:
+                                    raise
+                            else:
+                                raise
+                        else:
+                            raise
+
                     if (response.status_code == 503) and (retries > 0):
                         log.info(error_msg)
                         if verbose:
